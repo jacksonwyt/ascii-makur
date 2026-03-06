@@ -634,7 +634,7 @@ function renderExportPanel() {
           <span class="control-label">Code Export</span>
         </div>
         <p class="export-note">
-          HTML and React exports stay live by embedding the renderer runtime. SVG and image exports remain single-frame by design.
+          HTML and React exports are standalone and carry the renderer runtime plus your source asset inside the export. SVG and image exports remain single-frame by design.
         </p>
         <div class="export-popover-actions export-popover-actions-split">
           <button type="button" class="export-copy" id="copyHtmlButton" ${state.busy ? "disabled" : ""}>COPY HTML</button>
@@ -868,7 +868,7 @@ app.addEventListener("click", async (event) => {
     await runExport(() =>
       copyCodeExport(renderer, state.source, state.settings, state.exportSettings, "html", {
         onProgress(progress) {
-          setExportStatus("Rendering animated HTML export...", progress);
+          setExportStatus("Building standalone HTML export...", progress);
         },
         onStatus(text) {
           setExportStatus(text, state.exportProgress);
@@ -881,7 +881,7 @@ app.addEventListener("click", async (event) => {
     await runExport(() =>
       copyCodeExport(renderer, state.source, state.settings, state.exportSettings, "react", {
         onProgress(progress) {
-          setExportStatus("Rendering animated React export...", progress);
+          setExportStatus("Building standalone React export...", progress);
         },
         onStatus(text) {
           setExportStatus(text, state.exportProgress);
@@ -894,7 +894,7 @@ app.addEventListener("click", async (event) => {
     await runExport(() =>
       downloadHtmlExport(renderer, state.source, state.settings, state.exportSettings, {
         onProgress(progress) {
-          setExportStatus("Rendering downloadable HTML export...", progress);
+          setExportStatus("Building downloadable standalone HTML...", progress);
         },
         onStatus(text) {
           setExportStatus(text, state.exportProgress);

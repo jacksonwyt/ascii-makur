@@ -3,6 +3,7 @@ const FFMPEG_MODULE_URL = "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/d
 const FFMPEG_UTIL_URL = "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js";
 
 let ffmpegCachePromise = null;
+let runtimeSourceCachePromise = null;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -99,6 +100,27 @@ function canvasToBlob(canvas, type, quality) {
       quality
     );
   });
+}
+
+async function fetchText(url, errorMessage) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(errorMessage);
+  }
+  return response.text();
+}
+
+async function loadRuntimeSources() {
+  if (runtimeSourceCachePromise) {
+    return runtimeSourceCachePromise;
+  }
+
+  runtimeSourceCachePromise = Promise.all([
+    fetchText(new URL("./config.js", import.meta.url), "Unable to load the standalone config runtime."),
+    fetchText(new URL("./renderer.js", import.meta.url), "Unable to load the standalone renderer runtime.")
+  ]).then(([configSource, rendererSource]) => ({ configSource, rendererSource }));
+
+  return runtimeSourceCachePromise;
 }
 
 async function loadFfmpeg() {
@@ -241,17 +263,10 @@ function buildSvgMarkup(frame, exportSettings) {
   return parts.join("");
 }
 
-function embedOrigin(embedUrl) {
-  try {
-    return new URL(embedUrl).origin;
-  } catch {
-    return "*";
-  }
-}
-
-function buildRuntimeHtmlDocument(embedUrl, payload, aspectRatio, backgroundColor, title = "ASCII Animation") {
+function buildStandaloneHtmlDocument(payload, aspectRatio, backgroundColor, runtimeSources, title = "ASCII Animation") {
   const serializedPayload = escapeScriptContent(JSON.stringify(payload));
-  const targetOrigin = embedOrigin(embedUrl);
+  const serializedConfigSource = escapeScriptContent(JSON.stringify(runtimeSources.configSource));
+  const serializedRendererSource = escapeScriptContent(JSON.stringify(runtimeSources.rendererSource));
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -271,6 +286,7 @@ function buildRuntimeHtmlDocument(embedUrl, payload, aspectRatio, backgroundColo
         display: grid;
         place-items: center;
         background: ${backgroundColor};
+        overflow: hidden;
       }
 
       .ascii-frame {
@@ -284,88 +300,232 @@ function buildRuntimeHtmlDocument(embedUrl, payload, aspectRatio, backgroundColo
   </head>
   <body>
     <div class="ascii-animation">
-      <iframe
-        class="ascii-frame"
-        id="asciiFrame"
-        title="ASCII animation"
-        loading="lazy"
-        allow="autoplay"
-        src="${embedUrl}"
-      ></iframe>
+      <canvas class="ascii-frame" id="asciiCanvas" aria-label="ASCII animation"></canvas>
     </div>
-    <script>
-      const payload = ${serializedPayload};
-      const frame = document.getElementById("asciiFrame");
-      const targetOrigin = ${JSON.stringify(targetOrigin)};
+    <script type="module">
+      const PAYLOAD = ${serializedPayload};
+      const CONFIG_SOURCE = ${serializedConfigSource};
+      const RENDERER_SOURCE = ${serializedRendererSource};
+      const canvas = document.getElementById("asciiCanvas");
+      let runtimeCachePromise = null;
+      let currentSource = null;
+      let rendererInstance = null;
 
-      function sendPayload() {
-        if (!frame || !frame.contentWindow) {
-          return;
+      function destroySource() {
+        if (currentSource?.element instanceof HTMLVideoElement) {
+          currentSource.element.pause();
+          currentSource.element.srcObject = null;
+          currentSource.element.src = "";
         }
-        frame.contentWindow.postMessage({ type: "ascii-makur:payload", payload }, targetOrigin);
+        currentSource = null;
       }
 
-      frame.addEventListener("load", () => {
-        sendPayload();
-        setTimeout(sendPayload, 120);
+      async function loadRuntime() {
+        if (runtimeCachePromise) {
+          return runtimeCachePromise;
+        }
+
+        runtimeCachePromise = (async () => {
+          const configUrl = URL.createObjectURL(new Blob([CONFIG_SOURCE], { type: "text/javascript" }));
+          const patchedRendererSource = RENDERER_SOURCE.replace('"./config.js"', JSON.stringify(configUrl));
+          const rendererUrl = URL.createObjectURL(new Blob([patchedRendererSource], { type: "text/javascript" }));
+          const [{ DEFAULT_SETTINGS }, { AsciiRenderer }] = await Promise.all([
+            import(configUrl),
+            import(rendererUrl)
+          ]);
+          return {
+            DEFAULT_SETTINGS,
+            AsciiRenderer,
+            cleanup() {
+              URL.revokeObjectURL(configUrl);
+              URL.revokeObjectURL(rendererUrl);
+            }
+          };
+        })();
+
+        return runtimeCachePromise;
+      }
+
+      async function loadImageSource(src) {
+        const image = new Image();
+        image.decoding = "async";
+        image.src = src;
+        await image.decode();
+        return { type: "image", element: image };
+      }
+
+      async function loadVideoSource(src) {
+        const video = document.createElement("video");
+        video.src = src;
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.preload = "auto";
+        await new Promise((resolve, reject) => {
+          video.onloadeddata = resolve;
+          video.onerror = () => reject(new Error("Unable to load the embedded video source."));
+        });
+        await video.play().catch(() => {});
+        return { type: "video", element: video };
+      }
+
+      async function materializeSource(payloadSource) {
+        if (!payloadSource) {
+          return null;
+        }
+        if (payloadSource.type === "image") {
+          return loadImageSource(payloadSource.src);
+        }
+        if (payloadSource.type === "video") {
+          return loadVideoSource(payloadSource.src);
+        }
+        return null;
+      }
+
+      async function boot() {
+        const runtime = await loadRuntime();
+        const settings = { ...runtime.DEFAULT_SETTINGS, ...(PAYLOAD.settings || {}) };
+        document.body.style.background = settings.backgroundColor || "${backgroundColor}";
+        rendererInstance = new runtime.AsciiRenderer(canvas);
+        currentSource = await materializeSource(PAYLOAD.source);
+        rendererInstance.setSettings(settings);
+        rendererInstance.setSource(currentSource);
+      }
+
+      boot().catch((error) => {
+        console.error(error);
       });
 
-      window.addEventListener("message", (event) => {
-        if (!event.data || event.data.type !== "ascii-makur:ready") {
-          return;
-        }
-        if (targetOrigin !== "*" && event.origin !== targetOrigin) {
-          return;
-        }
-        sendPayload();
+      window.addEventListener("beforeunload", () => {
+        destroySource();
+        rendererInstance?.destroy();
+        runtimeCachePromise?.then((runtime) => runtime.cleanup()).catch(() => {});
       });
     </script>
   </body>
 </html>`;
 }
 
-function buildRuntimeReactExport(embedUrl, payload, aspectRatio, backgroundColor) {
+function buildStandaloneReactExport(payload, aspectRatio, backgroundColor, runtimeSources) {
   const serializedPayload = JSON.stringify(payload, null, 2);
-  const targetOrigin = embedOrigin(embedUrl);
+  const serializedConfigSource = JSON.stringify(runtimeSources.configSource);
+  const serializedRendererSource = JSON.stringify(runtimeSources.rendererSource);
   return `import React, { useEffect, useRef } from "react";
 
-const EMBED_URL = ${JSON.stringify(embedUrl)};
-const TARGET_ORIGIN = ${JSON.stringify(targetOrigin)};
 const PAYLOAD = ${serializedPayload};
+const CONFIG_SOURCE = ${serializedConfigSource};
+const RENDERER_SOURCE = ${serializedRendererSource};
+
+let runtimeCachePromise = null;
+
+async function loadRuntime() {
+  if (runtimeCachePromise) {
+    return runtimeCachePromise;
+  }
+
+  runtimeCachePromise = (async () => {
+    const configUrl = URL.createObjectURL(new Blob([CONFIG_SOURCE], { type: "text/javascript" }));
+    const patchedRendererSource = RENDERER_SOURCE.replace('"./config.js"', JSON.stringify(configUrl));
+    const rendererUrl = URL.createObjectURL(new Blob([patchedRendererSource], { type: "text/javascript" }));
+    const [{ DEFAULT_SETTINGS }, { AsciiRenderer }] = await Promise.all([
+      import(configUrl),
+      import(rendererUrl)
+    ]);
+    return {
+      DEFAULT_SETTINGS,
+      AsciiRenderer,
+      cleanup() {
+        URL.revokeObjectURL(configUrl);
+        URL.revokeObjectURL(rendererUrl);
+      }
+    };
+  })();
+
+  return runtimeCachePromise;
+}
+
+function destroySource(source) {
+  if (source?.element instanceof HTMLVideoElement) {
+    source.element.pause();
+    source.element.srcObject = null;
+    source.element.src = "";
+  }
+}
+
+async function loadImageSource(src) {
+  const image = new Image();
+  image.decoding = "async";
+  image.src = src;
+  await image.decode();
+  return { type: "image", element: image };
+}
+
+async function loadVideoSource(src) {
+  const video = document.createElement("video");
+  video.src = src;
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  await new Promise((resolve, reject) => {
+    video.onloadeddata = resolve;
+    video.onerror = () => reject(new Error("Unable to load the embedded video source."));
+  });
+  await video.play().catch(() => {});
+  return { type: "video", element: video };
+}
+
+async function materializeSource(payloadSource) {
+  if (!payloadSource) {
+    return null;
+  }
+  if (payloadSource.type === "image") {
+    return loadImageSource(payloadSource.src);
+  }
+  if (payloadSource.type === "video") {
+    return loadVideoSource(payloadSource.src);
+  }
+  return null;
+}
 
 export function AsciiAnimation() {
-  const frameRef = useRef(null);
+  const canvasRef = useRef(null);
 
   useEffect(() => {
-    const frame = frameRef.current;
-    if (!frame) {
+    const canvas = canvasRef.current;
+    if (!canvas) {
       return undefined;
     }
 
-    const sendPayload = () => {
-      frame.contentWindow?.postMessage({ type: "ascii-makur:payload", payload: PAYLOAD }, TARGET_ORIGIN);
-    };
+    let cancelled = false;
+    let runtime = null;
+    let renderer = null;
+    let source = null;
 
-    const handleLoad = () => {
-      sendPayload();
-      window.setTimeout(sendPayload, 120);
-    };
-
-    const handleMessage = (event) => {
-      if (!event.data || event.data.type !== "ascii-makur:ready") {
+    (async () => {
+      runtime = await loadRuntime();
+      if (cancelled) {
         return;
       }
-      if (TARGET_ORIGIN !== "*" && event.origin !== TARGET_ORIGIN) {
+      const settings = { ...runtime.DEFAULT_SETTINGS, ...(PAYLOAD.settings || {}) };
+      renderer = new runtime.AsciiRenderer(canvas);
+      source = await materializeSource(PAYLOAD.source);
+      if (cancelled) {
+        destroySource(source);
+        renderer.destroy();
         return;
       }
-      sendPayload();
-    };
+      renderer.setSettings(settings);
+      renderer.setSource(source);
+    })().catch((error) => {
+      console.error(error);
+    });
 
-    frame.addEventListener("load", handleLoad);
-    window.addEventListener("message", handleMessage);
     return () => {
-      frame.removeEventListener("load", handleLoad);
-      window.removeEventListener("message", handleMessage);
+      cancelled = true;
+      destroySource(source);
+      renderer?.destroy();
+      runtimeCachePromise?.then((loadedRuntime) => loadedRuntime.cleanup()).catch(() => {});
     };
   }, []);
 
@@ -379,12 +539,9 @@ export function AsciiAnimation() {
         background: "${backgroundColor}"
       }}
     >
-      <iframe
-        ref={frameRef}
-        title="ASCII animation"
-        src={EMBED_URL}
-        loading="lazy"
-        allow="autoplay"
+      <canvas
+        ref={canvasRef}
+        aria-label="ASCII animation"
         style={{
           width: "100%",
           aspectRatio: "${aspectRatio}",
@@ -431,15 +588,20 @@ async function serializeSourceForEmbed(source, callbacks = {}) {
   };
 }
 
-function buildEmbedUrl() {
-  return new URL("embed.html", window.location.href).toString();
+function buildExportRenderSettings(source, settings, exportSettings) {
+  const nextSettings = { ...settings };
+  if (source?.type === "image") {
+    nextSettings.__loopSeamless = true;
+    nextSettings.__loopDuration = clamp(Number(exportSettings.animationDuration) || 6, 1, 30);
+  }
+  return nextSettings;
 }
 
-async function buildCodePayload(source, settings, callbacks = {}) {
+async function buildCodePayload(source, settings, exportSettings, callbacks = {}) {
   return {
     version: 1,
     source: await serializeSourceForEmbed(source, callbacks),
-    settings
+    settings: buildExportRenderSettings(source, settings, exportSettings)
   };
 }
 
@@ -464,9 +626,8 @@ async function prepareSourceForAnimation(source) {
     clone.onerror = () => reject(new Error("Unable to prepare source video for export."));
   });
   clone.currentTime = source.element.currentTime || 0;
-  await clone.play();
   return {
-    source: { type: "video", element: clone },
+    source: { type: "video", element: clone, duration: clone.duration || source.element.duration || 0 },
     cleanup: () => {
       clone.pause();
       clone.src = "";
@@ -476,6 +637,32 @@ async function prepareSourceForAnimation(source) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function seekVideoFrame(video, timeSeconds) {
+  return new Promise((resolve, reject) => {
+    if (Math.abs((video.currentTime || 0) - timeSeconds) < 0.0005 && video.readyState >= 2) {
+      resolve();
+      return;
+    }
+
+    const handleSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Unable to seek the source video for export."));
+    };
+    const cleanup = () => {
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("error", handleError);
+    };
+
+    video.addEventListener("seeked", handleSeeked, { once: true });
+    video.addEventListener("error", handleError, { once: true });
+    video.currentTime = timeSeconds;
+  });
 }
 
 function blobToDataUrl(blob) {
@@ -565,7 +752,9 @@ async function renderAnimationBlob(renderer, source, settings, exportSettings, f
   const canvas = document.createElement("canvas");
   const fps = clamp(Number(exportSettings.animationFps) || 24, format === "gif" ? 1 : 12, 60);
   const duration = clamp(Number(exportSettings.animationDuration) || 6, 1, 30);
+  const totalFrames = Math.max(1, Math.round(duration * fps));
   const exportScale = dimensions.height / Math.max(1, preview.height);
+  const renderSettings = buildExportRenderSettings(source, settings, exportSettings);
 
   const mimeType =
     ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find((candidate) =>
@@ -591,20 +780,26 @@ async function renderAnimationBlob(renderer, source, settings, exportSettings, f
   recorder.start(250);
 
   try {
-    const startedAt = performance.now();
-    const endsAt = startedAt + duration * 1000;
-    while (performance.now() < endsAt) {
-      const elapsed = (performance.now() - startedAt) * 0.001;
+    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
+      const elapsed = frameIndex / fps;
+      if (prepared.source.type === "video") {
+        const sourceDuration = Number(prepared.source.duration) || 0;
+        const safeTime =
+          sourceDuration > 0
+            ? Math.min(elapsed % sourceDuration, Math.max(sourceDuration - 1 / Math.max(fps * 2, 1), 0))
+            : elapsed;
+        await seekVideoFrame(prepared.source.element, safeTime);
+      }
       renderer.renderToCanvas(canvas, {
         source: prepared.source,
-        settings,
+        settings: renderSettings,
         pixelWidth: dimensions.width,
         pixelHeight: dimensions.height,
-        timeSeconds: performance.now() * 0.001 + elapsed,
+        timeSeconds: elapsed,
         exportScale,
         collectCells: false
       });
-      callbacks.onProgress?.(clamp(elapsed / duration, 0, 1));
+      callbacks.onProgress?.(clamp((frameIndex + 1) / totalFrames, 0, 1));
       await wait(1000 / fps);
     }
   } finally {
@@ -634,16 +829,17 @@ export async function buildCodeExports(renderer, source, settings, exportSetting
     throw new Error("Nothing to export yet.");
   }
 
-  callbacks.onStatus?.("Building live runtime export...");
-  callbacks.onProgress?.(0.15);
-  const embedUrl = buildEmbedUrl();
-  const payload = await buildCodePayload(source, settings, callbacks);
+  callbacks.onStatus?.("Bundling standalone runtime...");
+  callbacks.onProgress?.(0.1);
+  const runtimeSources = await loadRuntimeSources();
+  callbacks.onProgress?.(0.35);
+  const payload = await buildCodePayload(source, settings, exportSettings, callbacks);
   callbacks.onProgress?.(0.85);
   const backgroundColor = frame.backgroundColor || settings.backgroundColor || "#000000";
   const aspectRatio = `${frame.width} / ${frame.height}`;
   return {
-    html: buildRuntimeHtmlDocument(embedUrl, payload, aspectRatio, backgroundColor),
-    react: buildRuntimeReactExport(embedUrl, payload, aspectRatio, backgroundColor)
+    html: buildStandaloneHtmlDocument(payload, aspectRatio, backgroundColor, runtimeSources),
+    react: buildStandaloneReactExport(payload, aspectRatio, backgroundColor, runtimeSources)
   };
 }
 

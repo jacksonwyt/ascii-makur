@@ -156,6 +156,39 @@ function proceduralColor(column, row, width, height, time) {
   };
 }
 
+function loopState(settings, source, timeSeconds) {
+  const enabled =
+    settings.__loopSeamless === true &&
+    (source?.type === "image" || source?.type === "procedural");
+  if (!enabled) {
+    return {
+      enabled: false,
+      progress: 0,
+      theta: 0,
+      oscillation(rate, scale = 1) {
+        return timeSeconds * rate * scale;
+      },
+      cycle(rate) {
+        return ((timeSeconds * rate) % 1 + 1) % 1;
+      }
+    };
+  }
+
+  const duration = clamp(Number(settings.__loopDuration) || 6, 1, 30);
+  const progress = (((timeSeconds % duration) + duration) % duration) / duration;
+  return {
+    enabled: true,
+    progress,
+    theta: progress * Math.PI * 2,
+    oscillation(cycles, scale = 1) {
+      return progress * Math.PI * 2 * Math.max(1, Math.round(cycles)) * scale;
+    },
+    cycle(cycles) {
+      return ((progress * Math.max(1, Math.round(cycles))) % 1 + 1) % 1;
+    }
+  };
+}
+
 function processLuma(luma, settings) {
   let output = luma;
   output = (output - 128) * settings.contrast + 128;
@@ -263,7 +296,7 @@ function applyDither(values, columns, rows, settings) {
   return dithered;
 }
 
-function overlayIntensity(baseValue, column, row, columns, rows, settings, timeSeconds) {
+function overlayIntensity(baseValue, column, row, columns, rows, settings, timeSeconds, animationLoop) {
   const preset = settings.overlayPreset || "none";
   const strength = clamp(settings.overlayStrength ?? 0.45, 0, 1);
   if (preset === "none" || strength <= 0) {
@@ -276,11 +309,16 @@ function overlayIntensity(baseValue, column, row, columns, rows, settings, timeS
     const basis = directionBasis(settings.noiseDirection || "right");
     const coords = directionalCoordinates(column, row, columns, rows, basis);
     const magnitude = Math.max(columns, rows);
-    const phase = timeSeconds * speed * 2.4;
+    const phase = animationLoop.enabled
+      ? animationLoop.oscillation(speed * 2.4)
+      : timeSeconds * speed * 2.4;
     const primary = (coords.primary * magnitude + 17.3) / scale;
     const secondary = (coords.secondary * magnitude - 9.7) / scale;
     const wave = Math.sin(primary + phase) * Math.cos(secondary - phase * 0.73);
-    const beat = Math.sin(coords.primary * magnitude * 1.37 + coords.secondary * magnitude * 2.11 + phase * 6.2);
+    const beatPhase = animationLoop.enabled
+      ? animationLoop.oscillation(speed * 6.2)
+      : phase * 6.2;
+    const beat = Math.sin(coords.primary * magnitude * 1.37 + coords.secondary * magnitude * 2.11 + beatPhase);
     return clamp(baseValue + (wave * 0.65 + beat * 0.35) * (16 + strength * 72), 0, 255);
   }
 
@@ -292,18 +330,26 @@ function overlayIntensity(baseValue, column, row, columns, rows, settings, timeS
     const coords = directionalCoordinates(column, row, columns, rows, basis);
     const primary = coords.primary * Math.max(columns, rows);
     const secondary = coords.secondary * Math.max(columns, rows);
-    const shift = ((timeSeconds * speed * spacing * 1.7) % spacing + spacing) % spacing;
+    const shift = animationLoop.enabled
+      ? animationLoop.cycle(speed * 1.7) * spacing
+      : ((timeSeconds * speed * spacing * 1.7) % spacing + spacing) % spacing;
     const position = (primary + shift) % spacing;
     const distance = Math.min(position, spacing - position);
     const edge = 1 - clamp(distance / width, 0, 1);
-    const pulse = Math.sin((primary / spacing) * Math.PI * 2 + timeSeconds * speed * 1.8 + secondary * 0.011);
+    const pulse = Math.sin(
+      (primary / spacing) * Math.PI * 2 +
+        (animationLoop.enabled ? animationLoop.oscillation(speed * 1.8) : timeSeconds * speed * 1.8) +
+        secondary * 0.011
+    );
     return clamp(baseValue + edge * (strength * 88) * 0.85 + pulse * (strength * 88) * 0.32, 0, 255);
   }
 
   if (preset === "beam") {
     const basis = directionBasis(settings.beamDirection || "right");
     const coords = directionalCoordinates(column, row, columns, rows, basis);
-    const travel = ((timeSeconds * (0.45 + strength * 2.2)) % 1.2 + 1.2) % 1.2 - 0.1;
+    const travel = animationLoop.enabled
+      ? animationLoop.cycle(0.45 + strength * 2.2)
+      : ((timeSeconds * (0.45 + strength * 2.2)) % 1.2 + 1.2) % 1.2 - 0.1;
     const width = 0.08 + strength * 0.22;
     const distance = Math.abs(coords.primary - travel);
     const beam = Math.max(0, 1 - distance / width);
@@ -314,17 +360,28 @@ function overlayIntensity(baseValue, column, row, columns, rows, settings, timeS
     const basis = directionBasis(settings.glitchDirection || "right");
     const coords = directionalCoordinates(column, row, columns, rows, basis);
     const lineBucket = Math.floor((coords.secondary * Math.max(columns, rows)) / (2 + Math.floor((1 - strength) * 3)));
-    const frameStep = Math.floor(timeSeconds * 12);
-    const phase = (Math.sin((lineBucket + 1) * 19.73 + frameStep * 7.11) + 1) * 0.5;
+    const glitchClock = animationLoop.enabled ? animationLoop.oscillation(12, 7.11) : Math.floor(timeSeconds * 12) * 7.11;
+    const phase = (Math.sin((lineBucket + 1) * 19.73 + glitchClock) + 1) * 0.5;
     const active = phase > 0.74 ? 1 : 0;
-    const sweep = ((timeSeconds * (0.12 + strength * 0.28) + (Math.sin((lineBucket + 1) * 2.91) + 1) * 0.25) % 1 + 1) % 1;
+    const sweep = animationLoop.enabled
+      ? (animationLoop.cycle(0.12 + strength * 0.28) + (Math.sin((lineBucket + 1) * 2.91) + 1) * 0.25) % 1
+      : ((timeSeconds * (0.12 + strength * 0.28) + (Math.sin((lineBucket + 1) * 2.91) + 1) * 0.25) % 1 + 1) % 1;
     const distance = (coords.primary - sweep + 1) % 1;
     const bar = Math.max(0, 1 - distance / (0.12 + strength * 0.28));
     const ripple = Math.max(
       0,
-      Math.sin(distance * Math.PI * (5 + strength * 8) - timeSeconds * (2 + strength * 5))
+      Math.sin(
+        distance * Math.PI * (5 + strength * 8) -
+          (animationLoop.enabled ? animationLoop.oscillation(2 + strength * 5) : timeSeconds * (2 + strength * 5))
+      )
     );
-    const staticNoise = Math.sin((column + 1) * 17.7 + (row + 1) * 29.3 + timeSeconds * 9.1) * (1.5 + strength * 4.5);
+    const staticNoise =
+      Math.sin(
+        (column + 1) * 17.7 +
+          (row + 1) * 29.3 +
+          (animationLoop.enabled ? animationLoop.oscillation(9.1) : timeSeconds * 9.1)
+      ) *
+      (1.5 + strength * 4.5);
     return clamp(baseValue + active * (bar * (18 + strength * 86) + ripple * (6 + strength * 26)) + staticNoise, 0, 255);
   }
 
@@ -335,11 +392,23 @@ function overlayIntensity(baseValue, column, row, columns, rows, settings, timeS
     const x = column / Math.max(columns - 1, 1) * 2 - 1;
     const y = row / Math.max(rows - 1, 1) * 2 - 1;
     const vignetteLoss = (1 - clamp(x * x * 0.84 + y * y * 1.12, 0, 1)) * (24 + strength * 116);
-    const scan = Math.sin((coords.primary * magnitude + timeSeconds * (34 + strength * 24)) * Math.PI);
-    const flicker = Math.sin(timeSeconds * 61) * 0.55 + Math.sin(timeSeconds * 23) * 0.45;
+    const scan = Math.sin(
+      (coords.primary * magnitude + (animationLoop.enabled ? animationLoop.oscillation(6 + strength * 4, 1 / Math.PI) : timeSeconds * (34 + strength * 24))) *
+        Math.PI
+    );
+    const flicker =
+      Math.sin(animationLoop.enabled ? animationLoop.oscillation(10) : timeSeconds * 61) * 0.55 +
+      Math.sin(animationLoop.enabled ? animationLoop.oscillation(4) : timeSeconds * 23) * 0.45;
     const highlight = Math.max(
       0,
-      1 - Math.abs(coords.primary - (((timeSeconds * (0.12 + strength * 0.24)) % 1 + 1) % 1)) / (0.045 + strength * 0.08)
+      1 -
+        Math.abs(
+          coords.primary -
+            (animationLoop.enabled
+              ? animationLoop.cycle(0.12 + strength * 0.24)
+              : (((timeSeconds * (0.12 + strength * 0.24)) % 1 + 1) % 1))
+        ) /
+          (0.045 + strength * 0.08)
     );
     return clamp(baseValue + scan * (14 + strength * 36) + flicker * (5 + strength * 14) + highlight * (18 + strength * 64) - vignetteLoss, 0, 255);
   }
@@ -349,8 +418,12 @@ function overlayIntensity(baseValue, column, row, columns, rows, settings, timeS
     const coords = directionalCoordinates(column, row, columns, rows, basis);
     const scale = clamp(settings.matrixScale ?? 18, 6, 48);
     const speed = clamp(settings.matrixSpeed ?? 1, 0.1, 4);
-    const drift = Math.sin(coords.secondary * scale * 0.7 + timeSeconds * speed * 4.2);
-    const rain = Math.cos(coords.primary * scale * 3.4 - timeSeconds * speed * 5.1);
+    const drift = Math.sin(
+      coords.secondary * scale * 0.7 + (animationLoop.enabled ? animationLoop.oscillation(speed * 4.2) : timeSeconds * speed * 4.2)
+    );
+    const rain = Math.cos(
+      coords.primary * scale * 3.4 - (animationLoop.enabled ? animationLoop.oscillation(speed * 5.1) : timeSeconds * speed * 5.1)
+    );
     return clamp(baseValue + (drift * 0.35 + rain * 0.65) * (38 + strength * 140), 0, 255);
   }
 
@@ -736,6 +809,7 @@ export class AsciiRenderer {
     const exportScale = clamp(options.exportScale || 1, 0.25, 8);
     const collectCells = options.collectCells === true;
     const timeSeconds = Number.isFinite(options.timeSeconds) ? options.timeSeconds : performance.now() * 0.001;
+    const animationLoop = loopState(settings, source, timeSeconds);
     const ctx = targetCanvas.getContext("2d");
     if (!ctx || !this.sampleCtx) {
       return null;
@@ -835,7 +909,16 @@ export class AsciiRenderer {
           b: sample.data[sampleIndex + 2]
         };
         const base = 0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b;
-        luma[row * columns + column] = overlayIntensity(processLuma(base, settings), column, row, columns, rows, settings, timeSeconds);
+        luma[row * columns + column] = overlayIntensity(
+          processLuma(base, settings),
+          column,
+          row,
+          columns,
+          rows,
+          settings,
+          timeSeconds,
+          animationLoop
+        );
       }
     }
 
@@ -884,7 +967,15 @@ export class AsciiRenderer {
         const liftedValue = clamp(Math.round(baseValue + radial * radial * 34), 0, 255);
         const inverseNoise = clamp(
           ((baseValue / 255 - 0.5) * (0.65 + inverseMix * 1.95) + 0.5) -
-            (bayerNoise(column, row) * 0.72 + ((Math.sin((column + 1) * 7.31 + (row + 1) * 3.17 + timeSeconds * 0.75) + 1) * 0.5) * 0.28),
+            (bayerNoise(column, row) * 0.72 +
+              ((Math.sin(
+                (column + 1) * 7.31 +
+                  (row + 1) * 3.17 +
+                  (animationLoop.enabled ? animationLoop.oscillation(2) : timeSeconds * 0.75)
+              ) +
+                1) *
+                0.5) *
+                0.28),
           0,
           1
         );
@@ -895,7 +986,14 @@ export class AsciiRenderer {
 
         if (bgDither > 0) {
           const noise = bayerNoise(column, row);
-          const flicker = (Math.sin((column + 1) * 7.31 + (row + 1) * 3.17 + timeSeconds * 0.75) + 1) * 0.5;
+          const flicker =
+            (Math.sin(
+              (column + 1) * 7.31 +
+                (row + 1) * 3.17 +
+                (animationLoop.enabled ? animationLoop.oscillation(2) : timeSeconds * 0.75)
+            ) +
+              1) *
+            0.5;
           const field = clamp((baseValue / 255) * (0.92 + bgDither * 0.9) - (noise * 0.72 + flicker * 0.28) + 0.34, 0, 1);
           if (field > 0.04) {
             const size = Math.max(0.45, Math.min(glyphWidth, glyphHeight) * clamp(0.18 + field * (0.85 + bgDither * 0.5), 0.12, 1));
@@ -1028,7 +1126,14 @@ export class AsciiRenderer {
           styledValue = clamp(adjustedValue + clamp(settings.retroNoise ?? 0.45, 0, 1) * 24, 0, 255);
         }
         if (settings.style === "terminal" && settings.overlayPreset === "matrix") {
-          styledValue = clamp(styledValue + (Math.sin((column + 1) * 2.17 + timeSeconds * 5.7) + Math.cos((row + 1) * 1.93 - timeSeconds * 4.1)) * 22, 0, 255);
+          styledValue = clamp(
+            styledValue +
+              (Math.sin((column + 1) * 2.17 + (animationLoop.enabled ? animationLoop.oscillation(5) : timeSeconds * 5.7)) +
+                Math.cos((row + 1) * 1.93 - (animationLoop.enabled ? animationLoop.oscillation(4) : timeSeconds * 4.1))) *
+                22,
+            0,
+            255
+          );
         }
 
         const glyph = pickGlyph(styledValue, glyphs);
