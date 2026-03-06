@@ -53,7 +53,21 @@ app.innerHTML = `
     <section id="canvas-container">
       <div class="canvas-top-bar">
         <div class="canvas-top-brand">
-          <span class="canvas-kicker">ASCII MAKUR</span>
+          <a
+            class="github-badge"
+            href="https://github.com/jacksonwyt/ascii-makur.git"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open GitHub"
+            title="GitHub"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 .5C5.65.5.5 5.65.5 12A11.5 11.5 0 0 0 8.36 22.7c.58.1.79-.25.79-.56l-.02-1.98c-3.19.69-3.87-1.53-3.87-1.53-.52-1.33-1.28-1.68-1.28-1.68-1.05-.71.08-.69.08-.69 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.95.1-.75.4-1.25.72-1.53-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.19 1.18a11.1 11.1 0 0 1 5.8 0c2.22-1.49 3.19-1.18 3.19-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.08 0 4.41-2.68 5.38-5.24 5.67.41.35.77 1.04.77 2.1l-.01 3.12c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"
+                fill="currentColor"
+              />
+            </svg>
+          </a>
           <span class="canvas-source-label" id="sourceSummary"></span>
         </div>
         <div class="canvas-top-meta">

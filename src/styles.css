@@ -97,8 +97,31 @@ button {
   min-width: 0;
 }
 
-.canvas-kicker {
-  color: var(--accent);
+.github-badge {
+  width: 1.8rem;
+  height: 1.8rem;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.04);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.github-badge:hover {
+  transform: translateY(-1px);
+  border-color: rgba(246, 228, 109, 0.4);
+  background: rgba(246, 228, 109, 0.1);
+}
+
+.github-badge svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  display: block;
 }
 
 .canvas-source-label {
