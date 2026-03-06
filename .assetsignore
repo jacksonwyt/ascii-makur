@@ -1,0 +1,7 @@
+.git/
+.wrangler/
+node_modules/
+README.md
+package.json
+server.js
+.DS_Store
