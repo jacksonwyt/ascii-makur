@@ -6,6 +6,13 @@ const EMBED_READY_TYPE = "ascii-makur:ready";
 
 const canvas = document.querySelector("#embedCanvas");
 const renderer = new AsciiRenderer(canvas);
+const parentOrigin = (() => {
+  try {
+    return document.referrer ? new URL(document.referrer).origin : null;
+  } catch {
+    return null;
+  }
+})();
 
 let currentSource = null;
 
@@ -72,6 +79,12 @@ window.addEventListener("message", async (event) => {
   if (!event.data || event.data.type !== EMBED_MESSAGE_TYPE) {
     return;
   }
+  if (event.source !== window.parent) {
+    return;
+  }
+  if (!parentOrigin || event.origin !== parentOrigin) {
+    return;
+  }
   try {
     await applyPayload(event.data.payload);
   } catch (error) {
@@ -81,7 +94,9 @@ window.addEventListener("message", async (event) => {
   }
 });
 
-window.parent?.postMessage({ type: EMBED_READY_TYPE }, "*");
+if (window.parent && parentOrigin) {
+  window.parent.postMessage({ type: EMBED_READY_TYPE }, parentOrigin);
+}
 renderer.renderNow();
 
 window.addEventListener("beforeunload", () => {

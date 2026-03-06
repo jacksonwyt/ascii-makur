@@ -145,6 +145,15 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function isVideoFile(file) {
   return file.type.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)$/i.test(file.name);
 }
@@ -340,7 +349,7 @@ function renderControlsPanel() {
       styleControls.push(`
         <div class="control-row">
           <label>Custom Character Sequence</label>
-          <input class="control-text" type="text" maxLength="100" value="${state.settings.customCharset}" data-setting="customCharset" />
+          <input class="control-text" type="text" maxLength="100" value="${escapeHtml(state.settings.customCharset)}" data-setting="customCharset" />
         </div>
       `);
     }
@@ -374,7 +383,7 @@ function renderControlsPanel() {
     styleControls.push(`
       <div class="control-row">
         <label>Particle Char</label>
-        <input class="control-text" type="text" maxLength="1" value="${state.settings.particleChar}" data-setting="particleChar" />
+        <input class="control-text" type="text" maxLength="1" value="${escapeHtml(state.settings.particleChar)}" data-setting="particleChar" />
       </div>
     `);
   }
@@ -476,11 +485,11 @@ function renderExportPanel() {
       <div class="control-row">
         <span class="control-label">Image Export</span>
       </div>
-      <div class="control-grid-3">
-        <div class="control-row">
-          <label>File Name</label>
-          <input class="control-text" type="text" value="${state.exportSettings.imageName}" data-export-setting="imageName" />
-        </div>
+        <div class="control-grid-3">
+          <div class="control-row">
+            <label>File Name</label>
+            <input class="control-text" type="text" value="${escapeHtml(state.exportSettings.imageName)}" data-export-setting="imageName" />
+          </div>
         <div class="control-row">
           <label>Format</label>
           <select class="control-select" data-export-setting="imageFormat">
@@ -518,7 +527,7 @@ function renderExportPanel() {
         <div class="control-grid-3">
           <div class="control-row">
             <label>File Name</label>
-            <input class="control-text" type="text" value="${state.exportSettings.svgName}" data-export-setting="svgName" />
+            <input class="control-text" type="text" value="${escapeHtml(state.exportSettings.svgName)}" data-export-setting="svgName" />
           </div>
           <div class="control-row">
             <label>Mode</label>
@@ -568,7 +577,7 @@ function renderExportPanel() {
         <div class="control-grid-3">
           <div class="control-row">
             <label>File Name</label>
-            <input class="control-text" type="text" value="${state.exportSettings.animationName}" data-export-setting="animationName" />
+            <input class="control-text" type="text" value="${escapeHtml(state.exportSettings.animationName)}" data-export-setting="animationName" />
           </div>
           <div class="control-row">
             <label>Duration</label>
@@ -613,7 +622,7 @@ function renderExportPanel() {
           state.exportStatus
             ? `
               <div class="save-status">
-                <div>${state.exportStatus}</div>
+                <div>${escapeHtml(state.exportStatus)}</div>
                 ${state.exportProgress > 0 ? `<div class="progress-meter"><span style="width:${Math.round(state.exportProgress * 100)}%"></span></div>` : ""}
               </div>
             `
